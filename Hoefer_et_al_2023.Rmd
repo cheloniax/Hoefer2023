@@ -1,0 +1,1686 @@
+---
+title: "Hoefer et al 2023 - Sampling Methods in Reptiles"
+author: "Sebastian Hoefer"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    theme: cosmo
+    toc: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning=TRUE, 
+                      error=FALSE, echo = TRUE)
+```
+
+# Load packages
+Load packages needed for data manipulation and analyses.
+
+```{r Load packages}
+library(tidyverse)  #for data wrangling etc
+library(cmdstanr)   #for cmdstan
+library(brms)       #for fitting models in STAN
+library(standist)   #for exploring distributions - *******must come after tidyverse********
+library(coda)       #for diagnostics
+library(bayesplot)  #for diagnostics
+library(DHARMa)     #for residual diagnostics
+library(rstan)      #for interfacing with STAN
+library(emmeans)    #for marginal means etc
+library(broom)      #for tidying outputs
+library(tidybayes)  #for more tidying outputs
+library(HDInterval) #for HPD intervals
+library(ggeffects)  #for partial plots
+library(broom.mixed)#for summarising models
+library(posterior)  #for posterior draws
+library(ggeffects)  #for partial effects plots
+library(patchwork)  #for multi-panel figures
+library(bayestestR) #for ROPE
+library(see)        #for some plots
+library(reshape2)
+library(vegan)
+library(car)
+library(ggvegan)
+library(ggrepel)
+library(GGally)
+library(corrplot)
+library(EcolUtils)
+library(scales)
+library(colorspace)
+library(MuMIn)
+library(knitr)
+library(report)
+library(ggridges)
+library(gghalves)
+library(loo)
+library(performance)
+```
+
+# Functions
+Custom ggplot theme for visualisation.
+
+```{r Custom ggplot theme}
+my.theme <- function(){
+  theme_classic() +
+    theme(text = element_text(family = "Avenir Next"),
+          axis.title.y = element_text(margin = margin(t = 0,r = 20,b = 0,l = 0)),
+          axis.title.x = element_text(margin = margin(t = 20,r = 0,b = 0,l = 0)), 
+          plot.margin = unit(c(5, 10, 5, 10), units = "mm"),
+          strip.background = element_rect(fill = "#CCCCFF"),
+          strip.text.x = element_text(size = 20),
+          axis.title = element_text(size = 20),
+          axis.text = element_text(size = 18),
+          legend.text = element_text(size = 15),
+          legend.title = element_text(size = 15))
+}
+```
+
+# Load data
+```{r Reptile data including recaptures}
+reptile_data <- read.csv("reptile_data.csv")
+```
+
+# Species Richness
+
+## Prepare data
+Created an object with coordinates for each plot to assess the effect of latitude.
+
+```{r object with lats and longs for each site.plot}
+site <- c(rep("Duval",4), rep("Mourachan",4), rep("Tarcutta",4), rep("Wambiana",4), rep("Undara",4), rep("Rinyirru",4))
+site.plot <- c("Duval.DryA","Duval.DryB","Duval.WetA", "Duval.WetB", "Mourachan.DryA", "Mourachan.DryB", "Mourachan.WetA", "Mourachan.WetB", "Tarcutta.DryA", "Tarcutta.DryB", "Tarcutta.WetA", "Tarcutta.WetB", "Wambiana.DryA", "Wambiana.DryB", "Wambiana.WetA", "Wambiana.WetB",  "Undara.DryA", "Undara.DryB", "Undara.WetA", "Undara.WetB", "Rinyirru.DryA", "Rinyirru.DryB", "Rinyirru.WetA", "Rinyirru.WetB")
+lat <- c(-30.41734901, -30.40221297, -30.41803398, -30.40110799, -27.77898598, -27.77996097, -27.78425401, -27.77876303, -35.36852497, -35.37876002, -35.36012203, -35.36613797, -20.53070999, -20.526226, -20.53458997, -20.53051997, -18.18705803, -18.24565097, -18.18492902, -18.26552999, -15.05447703, -15.04400703, -15.04891698, -15.04438899)
+long <- c(151.622667, 151.624706, 151.61276, 151.629483, 149.032006, 148.981, 149.021332, 148.970948, 147.696893, 147.703341, 147.697579, 147.707788, 146.113426, 146.110754, 146.103876, 146.101471, 144.539753, 144.553799, 144.5324, 144.556613, 144.256419, 144.242852, 144.261894, 144.26052)
+wet.dry <- rep(c("dry", "dry", "wet", "wet"),6)
+
+coord <- data.frame(site, site.plot, lat, long, wet.dry)
+```
+
+Summarised the total number of species per method for each plot across all sites.
+
+```{r}
+reptile_summary <- reptile_data %>% 
+  unite(site.plot, c(site, plot), sep = ".", remove = FALSE) %>% 
+  select(-plot) %>% 
+  group_by(site, site.plot, assessment.method) %>% 
+  summarise(richness = length(unique(scientific.name))) %>% 
+  ungroup() %>% 
+  add_column(wet.dry = ifelse(.$site.plot %in% c("Duval.WetA", "Duval.WetB",
+                                                 "Tarcutta.WetA", "Tarcutta.WetB",
+                                                 "Mourachan.WetA", "Mourachan.WetB",
+                                                 "Wambiana.WetA", "Wambiana.WetB",
+                                                 "Undara.WetA", "Undara.WetB",
+                                                 "Rinyirru.WetA", "Rinyirru.WetB"), "wet", "dry"))
+```
+
+The data frame was missing zero values for methods that didn't capture any species at a given plot. The following adds zeros for those instances.
+
+```{r}
+# Created object with all combinations of plots and methods to include zero values
+plots <- unique(reptile_summary$site.plot)
+methods <- unique(reptile_summary$assessment.method)
+zeros <- crossing(plots, methods)
+
+# Added reference column for future join 
+zeros$plots.methods <- paste(zeros$plots, zeros$methods)
+
+# Selected only columns relevant to join
+reptile_summary2 <- reptile_summary %>% 
+  select("site.plot", "assessment.method", "richness")
+
+# Added reference column for future join 
+reptile_summary2$plots.methods <- paste(reptile_summary2$site.plot, reptile_summary2$assessment.method)
+
+# Joined objects to include zero values for methods across plots
+reptile_summary_all <- merge(reptile_summary2, zeros, by = "plots.methods",
+                             all.x = T, all.y = T) %>% 
+  select("plots", "methods", "richness") %>% 
+  replace(is.na(.), 0) %>% 
+  rename(site.plot = plots, assessment.method = methods) %>% 
+  left_join(coord, by = "site.plot") %>% 
+  mutate(site = factor(site, levels = c("Tarcutta", "Duval", "Mourachan", "Wambiana",
+                                        "Undara", "Rinyirru")),
+         site.plot = factor(site.plot, levels = c("Tarcutta.DryA", "Tarcutta.DryB", "Tarcutta.WetA", "Tarcutta.WetB", "Duval.DryA", "Duval.DryB", "Duval.WetA", "Duval.WetB", "Mourachan.DryA", "Mourachan.DryB", "Mourachan.WetA", "Mourachan.WetB","Wambiana.DryA", "Wambiana.DryB", "Wambiana.WetA", "Wambiana.WetB", "Undara.DryA", "Undara.DryB", "Undara.WetA", "Undara.WetB", "Rinyirru.DryA", "Rinyirru.DryB", "Rinyirru.WetA", "Rinyirru.WetB")),
+         assessment.method = factor(assessment.method, levels = c("pitfall", "funnel","incidentals","spotlighting","cover board","camera")),
+         wet.dry = factor(wet.dry),
+         richness = as.numeric(richness))
+```
+
+## Bayesian Analysis
+
+### Priors
+
+Defining priors for Bayesian models.
+
+Priors for the intercept.
+```{r for the intercept}
+reptile_summary_all %>% summarise(median(log(richness)))
+#1.1
+reptile_summary_all %>% summarise(mad(log(richness)))
+#1.5
+```
+
+Priors for the slope.
+```{r for the slope}
+log(sd(reptile_summary_all$richness))/apply(model.matrix(~assessment.method*lat, data = reptile_summary_all), 2, sd)
+#3.7
+```
+
+### Fit model
+
+#### Model 1
+```{r}
+priors1 <- prior(normal(1.1,1.5), class  = "Intercept") +
+  prior(normal(0,3.7), class = "b") +
+  prior(student_t(3,0,3.7), class = "sd")
+
+methods.form1 <- bf(richness ~ assessment.method*scale(lat, scale = FALSE) + (1|site/site.plot),
+                 family = poisson(link = "log"))
+
+methods.brm1 <- brm(methods.form1,
+                  data = reptile_summary_all,
+                  prior = priors1,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 8,
+                  warmup = 1000,
+                  backend = 'cmdstanr',
+                  save_pars = save_pars(all = TRUE))
+```
+
+##### Predictions
+
+```{r}
+methods.brm1 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm1 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.brm1b <- methods.brm1 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 8,
+         cores = 3,
+         backend = "cmdstanr",
+         save_pars = save_pars(all = TRUE))
+```
+##### Predictions
+
+```{r}
+methods.brm1b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm1b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Model 2
+
+```{r}
+priors2 <- prior(normal(1.1,1.5), class  = "Intercept") +
+  prior(normal(0,3.7), class = "b") +
+  prior(student_t(3,0,3.7), class = "sd")
+
+methods.form2 <- bf(richness ~ assessment.method*scale(lat, scale = FALSE) + (1|site/site.plot),
+                 family="negbinomial")
+
+methods.brm2 <- brm(methods.form2,
+                  data = reptile_summary_all,
+                  prior = priors2,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 8,
+                  warmup = 1000,
+                  backend = 'cmdstanr',
+                  save_pars = save_pars(all = TRUE))
+```
+
+##### Predictions
+
+```{r}
+methods.brm2 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm2 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.brm2b <- methods.brm2 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 8,
+         cores = 3,
+         backend = "cmdstanr",
+         save_pars = save_pars(all = TRUE))
+```
+##### Predictions
+
+```{r}
+methods.brm2b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm2b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Model 3
+
+```{r}
+priors3 <- prior(normal(1.1,1.5), class  = "Intercept") +
+  prior(normal(0,3.7), class = "b") +
+  prior(student_t(3,0,3.7), class = "sd")
+
+methods.form3 <- bf(richness ~ assessment.method*scale(lat, scale = FALSE) + (1|site/site.plot),
+                 family="negbinomial2")
+
+methods.brm3 <- brm(methods.form3,
+                  data = reptile_summary_all,
+                  prior = priors3,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 1,
+                  warmup = 1000,
+                  control = list(adapt_delta=0.99),
+                  backend = 'cmdstanr',
+                  save_pars = save_pars(all = TRUE))
+```
+
+##### Predictions
+
+```{r}
+methods.brm3 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm3 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.brm3b <- methods.brm3 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 2,
+         cores = 3,
+         control = list(adapt_delta=0.99),
+         backend = "cmdstanr",
+         save_pars = save_pars(all = TRUE))
+```
+##### Predictions
+
+```{r}
+methods.brm3b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.brm3b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+
+#### Compare Models
+
+```{r}
+(l.1b <- methods.brm1b %>% loo())
+```
+
+```{r}
+(l.2b <- methods.brm2b %>% loo())
+```
+
+```{r}
+(l.3b <- methods.brm3b %>% loo())
+```
+
+```{r}
+loo_compare(loo(methods.brm1b), loo(methods.brm2b), loo(methods.brm3b))
+```
+Model `methods.brm1b` was selected as best model based on loo estimates.
+
+
+### Diagnostics
+
+```{r}
+methods.brm1b %>% hypothesis("scalelatscaleEQFALSE = 0") %>% plot
+```
+
+#### Trace plots
+
+```{r}
+methods.brm1b$fit %>% stan_trace()
+```
+#### Autocorrelation plots
+
+```{r}
+methods.brm1b$fit %>% stan_ac()
+```
+#### Rhat statistic
+
+```{r}
+methods.brm1b$fit %>% stan_rhat()
+```
+#### Effective sampling size
+
+```{r}
+methods.brm1b$fit %>% stan_ess()
+```
+#### Posterior predictive check plot
+
+```{r}
+methods.brm1b %>% pp_check(type = "dens_overlay", ndraws = 200)
+```
+#### DHARMa residuals
+
+```{r}
+set.seed(6)
+preds <- posterior_predict(methods.brm1b,  ndraws=250,  summary=FALSE)
+method.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = reptile_summary_all$richness,
+                            fittedPredictedResponse = apply(preds, 2, median),
+                            integerResponse = TRUE)
+method.resids %>% plot()
+```
+#### Dispersion test
+
+```{r}
+method.resids %>% testDispersion()
+```
+#### Zero-inflation test
+
+```{r}
+method.resids %>% testZeroInflation()
+```
+### Investigation
+
+#### Methods pairwise comparison for each site
+
+```{r}
+newdata_lat <- with(reptile_summary_all,list(lat = c(-35.37876,-30.40221,-27.77876,
+                                                     -20.53459,-18.26553,-15.04439)))
+
+(diff.methods <- methods.brm1b %>%
+  emmeans(~assessment.method|lat, at = newdata_lat) %>%
+  regrid() %>% #to get on absolute scale: richness
+  pairs() %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
+  summarise("Average difference (%)" = median(Percent),
+            "Average fractional change" = median(f.change),
+            "Lower HDI" = HDInterval::hdi(f.change)[1],
+            "Upper HDI" = HDInterval::hdi(f.change)[2],
+            "Probability of difference" = sum(.value > 0)/n()) %>% #to see if there is any change
+  arrange(lat) %>%
+  rename("Site" = lat) %>% 
+  mutate(Site = as.factor(Site)) %>%  
+  mutate(Site = fct_recode(Site, "Tarcutta" = '-35.37876', "Duval" = '-30.40221',
+                           "Mourachan" = '-27.77876', "Wambiana" = '-20.53459',
+                           "Undara" = '-18.26553', "Rinyirru" = '-15.04439')))
+```
+
+#### Methods pairwise comparison for the average latitude
+
+```{r}
+(diff.meth.avg <- methods.brm1b %>%
+  emmeans(~assessment.method|lat) %>% 
+  pairs() %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
+  summarise("Average difference (%)" = median(Percent),
+            "Average fractional change" = median(f.change),
+            "Lower HDI" = HDInterval::hdi(f.change)[1],
+            "Upper HDI" = HDInterval::hdi(f.change)[2],
+            "Probability of difference" = sum(.value > 0)/n()) %>% 
+  select(-lat))
+```
+
+### Summary Plot
+
+```{r fractional change}
+methods.em <- methods.brm1b %>%
+  emmeans(~assessment.method|lat) %>% 
+  pairs() %>% 
+  gather_emmeans_draws() %>% 
+  mutate(rate = exp(.value))
+
+(methods.mag <- methods.em %>% 
+  ggplot() + 
+  geom_density_ridges_gradient(aes(x=rate, y=fct_reorder(contrast,rate)),
+                               alpha = 0.4, col = "white",
+                               quantile_lines = TRUE, quantiles = c(0.025, 0.975),
+                               show.legend = FALSE, fill = "#05596E") +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  scale_x_continuous("Fractional change", trans = scales::log2_trans(),
+                     breaks = c(1, 2, 5, 10, 50)) +
+  scale_y_discrete(name = "") +
+    my.theme())
+```
+
+
+```{r Proportion of richness across latitudes}
+lat.list <- with(reptile_summary_all, list(lat = seq(min(lat), max(lat), length = 100)))
+
+newdata <- emmeans(methods.brm1b, ~lat|assessment.method, at=lat.list, type = "response") %>%
+  gather_emmeans_draws() %>%
+  mutate(richness = exp(.value)) %>%
+  group_by(lat, .draw) %>%
+  mutate(sum_rate = sum(richness)) %>%
+  ungroup() %>%
+  mutate(proportion = richness/sum_rate) %>%
+  filter(.draw %in% sample(1:2400, 200))
+
+newdata3 <- emmeans(methods.brm1b, ~lat|assessment.method, at=lat.list, type = "response") %>% 
+  as.data.frame %>% 
+  group_by(lat) %>% 
+  mutate(sum_rate.avg = sum(rate),
+         proportion.avg = rate/sum_rate.avg) %>% 
+  ungroup()
+
+reptile_summary_all_prop <- reptile_summary_all %>% 
+  group_by(lat) %>% 
+  mutate(sum_rich = sum(richness),
+         proportion = richness/sum_rich)
+
+
+(methods.spag <- newdata %>% 
+  ggplot() +
+  geom_jitter(data = reptile_summary_all_prop, aes(x = lat, y = proportion, col = assessment.method),
+              height = 0, width = 0.2, alpha = 0.4) +
+  geom_line(aes(lat, proportion, col = assessment.method, group = interaction(assessment.method,.draw)), alpha=0.07) +
+  geom_line(data = newdata3, aes(lat, proportion.avg, group = assessment.method), linewidth = 1.7, col = "black") +
+  geom_line(data = newdata3, aes(lat, proportion.avg, col = assessment.method), linewidth = 1) +
+  my.theme() +
+  scale_y_continuous(name = "Proportion of total species richness",
+                     labels = scales::percent,
+                     breaks = seq(0, 0.5, by = 0.1),
+                     limits = c(-0.025,0.5)) +
+  scale_x_continuous(name = "", breaks=c(-35,-30,-25,-20,-15),
+                     labels=c("35ºS", "30ºS", "25ºS", "20ºS", "15ºS")) +
+  scale_fill_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8"),
+                      name = "Sampling Methods", labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8"),
+                      name = "", labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
+  theme(legend.text = element_text(margin = margin(t = 5)),
+        legend.position = c(y=0.5, x=-0.07),
+        legend.background = element_rect(fill = "transparent")) +
+  guides(colour = guide_legend(nrow = 1)) +
+  annotate("text", x = c(-35.37876,-30.40221,-27.77876,-20.53459,-18.26553,-15.04439),
+           y = c(rep(-0.025, 6)),
+           label = c("Tarcutta","Duval","Mourachan","Wambiana","Undara","Rinyirru")))
+```
+
+### Report
+
+```{r report package}
+report(methods.brm1b)
+```
+
+# Survey Effort
+
+Species accumulation curves
+
+## Prepare data
+
+Merged duplicate rows for duplicate observations and transformed the dataset to a wide format.
+
+```{r}
+reptile_community <- reptile_data %>% 
+  select(site, date, assessment.method,scientific.name) %>% #selected relevant grouping variables
+  group_by(across(everything())) %>% #groups by all available columns
+  mutate(number = n()) %>% #created a numbers column that counts the number of duplicate observations
+  ungroup() %>% 
+  unique() %>% #merged the duplicate rows
+  pivot_wider(names_from = "scientific.name", #transformed dataset from long to wide format
+              values_from = "number",
+              values_fill = list(number=0)) %>% #replaced NAs with 0
+  arrange(site)
+```
+
+Add a category for the total richness.
+
+```{r add total category to trapping methods}
+
+result.i <- vector("list",length(unique(reptile_community$site))) #created an empty list that was filled as the loop ran
+
+for(i in 1:length(unique(reptile_community$site))){ #looped over each study site
+  site.i <- reptile_community[reptile_community$site == unique(reptile_community$site)[i],] #subset to the site
+  
+  result.a <- vector("list",length(unique(site.i$date))) #created an empty list to be filled by each date
+  for(a in 1:length(unique(site.i$date))){ #looped over each date
+    
+    
+    date.a <- site.i[site.i$date == unique(site.i$date)[a],] #subset to the date
+    
+    meta.a <- cbind.data.frame(date.a$site[1],date.a$date[1],c("total"))
+    
+    date.a <- date.a %>% select(where(is.numeric)) #removed first 3 columns of metadata and only keeps those with numeric data i.e. species columns
+    
+    total.a <- cbind.data.frame(meta.a,rbind.data.frame(colSums(date.a))) #calculated column sums
+    
+    colnames(total.a) <- colnames(reptile_community)
+    
+    result.a[[a]] <- total.a} #added method results to list
+  
+  result.i[[i]] <- do.call("rbind.data.frame",result.a) #compressed list into data frame and add to the result.i list
+} #end loop
+
+result.i <- do.call("rbind.data.frame",result.i)
+
+reptile_community2 <- rbind.data.frame(reptile_community, result.i)
+
+```
+
+Add a category for the combined pitfall and funnel richness.
+
+```{r add pitfall + funnel category to trapping methods}
+
+result.j <- vector("list",length(unique(reptile_community$site))) #created an empty list that was filled as the loop ran
+
+for(i in 1:length(unique(reptile_community$site))){ #looped over each study site
+  site.i <- reptile_community[reptile_community$site == unique(reptile_community$site)[i],] #subset to the site
+  
+  result.a <- vector("list",length(unique(site.i$date))) #created an empty list to be filled by each date
+  for(a in 1:length(unique(site.i$date))){ #looped over each date
+    
+    
+    date.a <- site.i[site.i$date == unique(site.i$date)[a],] %>% 
+      filter(assessment.method %in% c("funnel", "pitfall"))
+    
+    meta.a <- cbind.data.frame(date.a$site[1],date.a$date[1],c("pitfunnel"))
+    
+    date.a <- date.a %>% select(where(is.numeric)) #removed first 3 columns of metadata and only keeps those with numeric data i.e. species columns
+    
+    total.a <- cbind.data.frame(meta.a,rbind.data.frame(colSums(date.a))) #calculated column sums
+    
+    colnames(total.a) <- colnames(reptile_community)
+    
+    result.a[[a]] <- total.a} #added method results to list
+  
+  result.j[[i]] <- do.call("rbind.data.frame",result.a) #compressed list into data frame and add to the result.i list
+} #end loop
+
+result.j <- do.call("rbind.data.frame",result.j)
+
+reptile_community2 <- rbind.data.frame(reptile_community2, result.j) %>% 
+  drop_na()
+
+```
+
+## Loop
+
+Created a loop that applied specaccum() to all methods across all sites. The output were values for richness of each method at each site over the course of the survey.
+
+```{r}
+# Created a data frame of zeros with 30 rows and the same number of columns as the total number of species.
+extra.rows <- data.frame(matrix(NA, nrow = 30, ncol = (ncol(reptile_community2)))) %>% 
+  replace(is.na(.), 0) %>% 
+  set_names(names(reptile_community2)) %>% 
+  select(-(1:3))
+
+result.i <- vector("list",length(unique(reptile_community2$site))) #created an empty list that was filled as the loop ran
+
+set.seed(8) #set seed for reproducibility
+for(i in 1:length(unique(reptile_community2$site))){ #looped over each study site
+  site.i <- reptile_community2[reptile_community2$site == unique(reptile_community2$site)[i],] #subset to the site
+  
+  dates.i <- ifelse(unique(site.i$site) %in% c("Tarcutta", "Undara", "Wambiana", "Rinyirru"), 28, 21) #manual addition of dates depending on site to avoid any issues from 0 animals being detected by any method on a given day 
+  
+  result.a <- vector("list",length(unique(site.i$assessment.method))) #created an empty list to be filled by each method
+  for(a in 1:length(unique(site.i$assessment.method))){ #looped over each method
+    
+    
+    method.a <- site.i[site.i$assessment.method == unique(site.i$assessment.method)[a],] #subset to the method
+    
+    if(nrow(method.a) > 1){ #only proceeded if detections occurred on more than 1 day for specaccum() to work properly
+      sampling.a <- method.a$assessment.method[1] #saved the name of the method
+      
+      method.a <- method.a %>% select(where(is.numeric)) #removed first 3 columns of metadata and only keeps those with numeric data i.e. species columns
+      
+      if(nrow(method.a)!=dates.i){ #if there were missing days (i.e., days when nothing was found, use the extra.rows object to add rows of zeros)
+        method.a <- rbind.data.frame(method.a,extra.rows[1:(dates.i-nrow(method.a)),])}
+      
+      accum.a <- specaccum(method.a,"random") #calculated data
+      
+      #created data frame of metadata, richness, and standard deviation
+      accum.a <- cbind.data.frame(rep(site.i$site[1],nrow(method.a)),rep(sampling.a,nrow(method.a)),accum.a$richness,accum.a$sd, 1:nrow(method.a))
+      colnames(accum.a) <- c("site","assessment.method","richness","sd", "day")
+      
+      accum.a$lower.ci <- accum.a$richness-qnorm(0.975)*accum.a$sd/sqrt(100) #calculated lower 95% CI
+      accum.a$upper.ci <- accum.a$richness+qnorm(0.975)*accum.a$sd/sqrt(100) #calculated upper 95% CI
+      
+      result.a[[a]] <- accum.a}} #added method results to list
+  
+  result.i[[i]] <- do.call("rbind.data.frame",result.a) #compressed list into data frame and add to the result.i list
+} #end loop
+```
+
+Transformed resulting list to a data frame.
+
+```{r}
+reptiles_wide.result <- do.call("rbind.data.frame",result.i) %>% #compressed result.i list into data frame
+mutate(assessment.method = factor(assessment.method, levels = c("pitfall",
+                                                                "funnel",
+                                                                "incidentals",
+                                                                "spotlighting",
+                                                                "cover board",
+                                                                "camera",
+                                                                "total",
+                                                                "pitfunnel")),
+         site = factor(site, levels = c("Rinyirru", "Undara", "Wambiana", "Mourachan",
+                                        "Duval", "Tarcutta")))
+```
+
+## Visualisation
+
+Plot of rarefaction curves for each method split by sites.
+
+```{r}
+(specaccum_reptiles <- ggplot(reptiles_wide.result, aes(x = day, y = richness, col = assessment.method)) + 
+  geom_ribbon(aes(ymin = lower.ci, ymax = upper.ci,fill=after_scale(alpha(colour, 0.3))),
+              linetype = 0.1) +
+  geom_vline(xintercept=c(7,14,21, 28), linetype="dotted", colour = "black") +
+  geom_line(aes(group = assessment.method)) +
+  my.theme() +
+  facet_wrap(~site) +
+  theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1.5),
+        panel.grid.major.y = element_line("lightgrey", linewidth = 0.2, linetype = "solid"),
+        strip.background = element_rect(fill = "lightgrey"),
+        axis.title = element_text(size = 22),
+        legend.title = element_text(size = 20),
+        legend.text = element_text(size = 20),
+        legend.position = "bottom") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.07)), breaks = seq(0, 45, by = 5),
+                     name = "Species Richness") +
+  scale_x_continuous(breaks = seq(0, 28, by = 7),
+                     name = "Survey Effort (Days)") +
+  scale_colour_manual(values = c("#FF8300","#D14103","#0CC170","black",
+                                 "#4E84C4","#8348D8","#FBA6EA","#E8BB5A"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board", "Camera Trap",
+                                 "Total Richness", "Pit + Funnel")))
+```
+
+# Community composition
+
+## Prepare data
+
+```{r}
+reptile_community3 <- reptile_data %>% 
+  filter(!recapture %in% c("y")) %>%  
+  select(site, plot, assessment.method,scientific.name) %>% #selected relevant grouping variables
+  group_by(across(everything())) %>% #groups by all available columns
+  mutate(number = n()) %>% #created a numbers column that counts the number of duplicate observations
+  ungroup() %>% 
+  unique() %>% #merged the duplicate rows
+  pivot_wider(names_from = "scientific.name", #transformed dataset from long to wide format
+              values_from = "number",
+              values_fill = list(number=0)) %>% #replaced NAs with 0
+  arrange(site) %>% 
+  mutate(assessment.method = factor(assessment.method))
+```
+
+```{r}
+duv <- reptile_community3 %>% filter(site=="Duval") %>% select(where(~ any(. != 0)))
+mou <- reptile_community3 %>% filter(site=="Mourachan") %>% select(where(~ any(. != 0)))
+rin <- reptile_community3 %>% filter(site=="Rinyirru") %>% select(where(~ any(. != 0)))
+tar <- reptile_community3 %>% filter(site=="Tarcutta") %>% select(where(~ any(. != 0)))
+und <- reptile_community3 %>% filter(site=="Undara") %>% select(where(~ any(. != 0)))
+wam <- reptile_community3 %>% filter(site=="Wambiana") %>% select(where(~ any(. != 0)))
+all <- reptile_community3 %>% select(where(~ any(. != 0)), -"Chelodina longicollis") %>% filter(rowSums(.[,4:ncol(.)]) > 0)
+```
+
+```{r Bray Curtis proportions - standardisation}
+#Function decostand() standardises proportions (method = "total") by rows (MARGIN = 1)
+rep_com_bray_duv <- duv %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_mou <- mou %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_rin <- rin %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_tar <- tar %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_und <- und %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_wam <- wam %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+rep_com_bray_all <- all %>%
+  select(where(is.numeric)) %>%
+  decostand(method="total", MARGIN = 1)
+```
+
+```{r jaccard binary transformation}
+#Function decostand() standardises presence/absence (method = "pa") by rows (MARGIN = 1)
+rep_com_jacc_duv <- duv %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_mou <- mou %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_rin <- rin %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_tar <- tar %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_und <- und %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_wam <- wam %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+rep_com_jacc_all <- all %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1)
+```
+
+## NMDS Ordination
+
+### Bray-Curtis dissimilarity
+```{r, results='hide'}
+all_nmds_bray <-  metaMDS(rep_com_bray_all, distance="bray", k=3,trymax=100, noshare=0.1)
+rin_nmds_bray <-  metaMDS(rep_com_bray_rin, distance="bray", k=2,trymax=100)
+und_nmds_bray <-  metaMDS(rep_com_bray_und, distance="bray", k=2,trymax=100)
+wam_nmds_bray <-  metaMDS(rep_com_bray_wam, distance="bray", k=2,trymax=100)
+mou_nmds_bray <-  metaMDS(rep_com_bray_mou, distance="bray", k=2,trymax=1000)
+
+#removed due to insufficient data
+duv_nmds_bray <-  metaMDS(rep_com_bray_duv, distance="bray", k=2,trymax=100)
+tar_nmds_bray <-  metaMDS(rep_com_bray_tar, distance="bray", k=2,trymax=100)
+```
+
+### Jaccard dissimilarity
+```{r, results='hide'}
+all_nmds_jacc <-  metaMDS(rep_com_jacc_all, distance="jaccard", k=2,trymax=100, noshare=0.1)
+rin_nmds_jacc <-  metaMDS(rep_com_jacc_rin, distance="jaccard", k=2,trymax=100)
+und_nmds_jacc <-  metaMDS(rep_com_jacc_und, distance="jaccard", k=2,trymax=100)
+wam_nmds_jacc <-  metaMDS(rep_com_jacc_wam, distance="jaccard", k=2,trymax=100)
+mou_nmds_jacc <-  metaMDS(rep_com_jacc_mou, distance="jaccard", k=2,trymax=100)
+
+#removed due to insufficient data
+duv_nmds_jacc <-  metaMDS(rep_com_jacc_duv, distance="jaccard", k=2,trymax=100)
+tar_nmds_jacc <-  metaMDS(rep_com_jacc_tar, distance="jaccard", k=2,trymax=100)
+```
+
+## Visualisation
+
+### Bray-Curtis dissimilarity
+
+```{r}
+all.methods <- all_nmds_bray$points
+all.species <- as.data.frame(all_nmds_bray$species) %>% 
+  mutate(species = row.names(.))
+all2 <- all[,1:3]
+rep_com_bray_all2 <- cbind.data.frame(all2, all.methods)
+
+
+gg <- merge(rep_com_bray_all2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_all2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.all.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+rin.methods <- rin_nmds_bray$points
+rin.species <- as.data.frame(rin_nmds_bray$species) %>% 
+  mutate(species = row.names(.))
+rin2 <- rin[,1:3]
+rep_com_bray_rin2 <- cbind.data.frame(rin2, rin.methods)
+
+
+gg <- merge(rep_com_bray_rin2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_rin2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.rin.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+und.methods <- und_nmds_bray$points
+und.species <- as.data.frame(und_nmds_bray$species) %>% 
+  mutate(species = row.names(.))
+und2 <- und[,1:3]
+rep_com_bray_und2 <- cbind.data.frame(und2, und.methods)
+
+
+gg <- merge(rep_com_bray_und2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_und2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.und.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+wam.methods <- wam_nmds_bray$points
+wam.species <- as.data.frame(wam_nmds_bray$species) %>% 
+  mutate(species = row.names(.))
+wam2 <- wam[,1:3]
+rep_com_bray_wam2 <- cbind.data.frame(wam2, wam.methods)
+
+
+gg <- merge(rep_com_bray_wam2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_wam2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.wam.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+mou.methods <- mou_nmds_bray$points
+mou.species <- as.data.frame(mou_nmds_bray$species) %>% 
+  mutate(species = row.names(.))
+mou2 <- mou[,1:3]
+rep_com_bray_mou2 <- cbind.data.frame(mou2, mou.methods)
+
+
+gg <- merge(rep_com_bray_mou2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_mou2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.mou.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+(mds.bray.all <- (mds.all.plot.bray.centroid + 
+  ggtitle('All sites') & theme(legend.position = "none")) +
+   (mds.rin.plot.bray.centroid + 
+  ggtitle('Rinyirru') & theme(legend.position = "none")) +
+   (mds.und.plot.bray.centroid + 
+  ggtitle('Undara') & theme(legend.position = "none")) +
+   (mds.wam.plot.bray.centroid + 
+  ggtitle('Wambiana') & theme(legend.position = "none")) +
+   (mds.mou.plot.bray.centroid + 
+  ggtitle('Mourachan') & theme(legend.position = "none")) + 
+   plot_annotation(tag_levels = "A", tag_suffix = ')') + 
+   theme(legend.position = c(2,0.65), legend.text = element_text(size = 18)))
+```
+
+### Jaccard dissimilarity
+
+```{r}
+all.methods.jacc <- all_nmds_jacc$points
+all.species.jacc <- as.data.frame(all_nmds_jacc$species) %>% 
+  mutate(species = row.names(.))
+all2 <- all[,1:3]
+rep_com_jacc_all2 <- cbind.data.frame(all2, all.methods.jacc)
+
+
+gg <- merge(rep_com_jacc_all2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_all2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.all.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+rin.methods <- rin_nmds_jacc$points
+rin.species <- as.data.frame(rin_nmds_jacc$species) %>% 
+  mutate(species = row.names(.))
+rin2 <- rin[,1:3]
+rep_com_jacc_rin2 <- cbind.data.frame(rin2, rin.methods)
+
+
+gg <- merge(rep_com_jacc_rin2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_rin2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.rin.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+und.methods <- und_nmds_jacc$points
+und.species <- as.data.frame(und_nmds_jacc$species) %>% 
+  mutate(species = row.names(.))
+und2 <- und[,1:3]
+rep_com_jacc_und2 <- cbind.data.frame(und2, und.methods)
+
+
+gg <- merge(rep_com_jacc_und2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_und2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.und.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+wam.methods <- wam_nmds_jacc$points
+wam.species <- as.data.frame(wam_nmds_jacc$species) %>% 
+  mutate(species = row.names(.))
+wam2 <- wam[,1:3]
+rep_com_jacc_wam2 <- cbind.data.frame(wam2, wam.methods)
+
+
+gg <- merge(rep_com_jacc_wam2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_wam2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.wam.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+mou.methods <- mou_nmds_jacc$points
+mou.species <- as.data.frame(mou_nmds_jacc$species) %>% 
+  mutate(species = row.names(.))
+mou2 <- mou[,1:3]
+rep_com_jacc_mou2 <- cbind.data.frame(mou2, mou.methods)
+
+
+gg <- merge(rep_com_jacc_mou2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_mou2,mean),by="assessment.method") %>% 
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+
+(mds.mou.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+  geom_point(size=3) +
+  geom_point(aes(x=mean.x,y=mean.y),size=5) +
+  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
+                      name = "",
+                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
+                                 "Spotlighting","Arboreal Cover Board",
+                                 "Camera Trap")) +
+  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+  my.theme() +
+    theme(legend.position = "bottom"))
+```
+
+```{r}
+(mds.jacc.all <- (mds.all.plot.jacc.centroid + 
+  ggtitle('All sites') & theme(legend.position = "none")) +
+   (mds.rin.plot.jacc.centroid + 
+  ggtitle('Rinyirru') & theme(legend.position = "none")) +
+   (mds.und.plot.jacc.centroid + 
+  ggtitle('Undara') & theme(legend.position = "none")) +
+   (mds.wam.plot.jacc.centroid + 
+  ggtitle('Wambiana') & theme(legend.position = "none")) +
+   (mds.mou.plot.jacc.centroid + 
+  ggtitle('Mourachan') & theme(legend.position = "none")) + 
+   plot_annotation(tag_levels = "A", tag_suffix = ')') + 
+   theme(legend.position = c(2,0.65), legend.text = element_text(size = 18)))
+```
+
+## Investigation
+
+## Adonis
+
+### Bray-Curtis dissimilarity
+```{r}
+all_b <- all %>% mutate(assessment.method = factor(assessment.method))
+all.dist <- vegdist(all[4:ncol(all)], 'bray')
+(all.adonis <- adonis2(all.dist ~ assessment.method, data=all_b))
+#Permutation test: significant difference between assessment methods for reptile communities.
+
+#Let's which method is different from which
+(adonis.methods.bray <- EcolUtils::adonis.pair(all.dist, all$assessment.method))
+#comparing all methods with each other
+#evidence that everything but pitfall vs funnel traps capture significantly different reptile communities.
+```
+
+### Jaccard dissimilarity
+```{r}
+all_j <- all %>% mutate(assessment.method = factor(assessment.method))
+all.dist2 <- vegdist(rep_com_jacc_all, 'jaccard')
+(all.adonis <- adonis2(all.dist2 ~ assessment.method, data=all_j))
+#Permutation test: significant difference between assessment methods for reptile communities.
+
+#Let's which method is different from which
+(adonis.methods.jacc <- EcolUtils::adonis.pair(all.dist2, all$assessment.method))
+#comparing all methods with each other
+#evidence that everything but pitfall vs funnel traps capture significantly different reptile communities.
+
+```
+
+# Detection probability
+
+Detection probability between methods for reptile families (maybe also terrestrial vs arboreal)
+
+Binary linear logistic model for the likelihood to detect a reptile of the different families for the methods across sites.
+
+## Prepare data
+
+```{r Detectability per method per day per survey plot}
+
+#Number of individuals of each species captured by each method per survey plot for every survey day.
+reptile_community4 <- reptile_data %>% 
+  unite(site.plot, c(site, plot), sep = ".", remove = FALSE) %>% 
+  select(-plot) %>%
+  select(site, site.plot, date, assessment.method, scientific.name) %>% #selected relevant grouping variables
+  group_by_at(1:4) %>%
+  mutate(number = n()) %>% #created a numbers column that counts the number of duplicate observations
+  ungroup() %>% 
+  unique() %>% #merged the duplicate rows
+  pivot_wider(names_from = "scientific.name", #transformed dataset from long to wide format
+              values_from = "number",
+              values_fill = list(number=0)) %>% #replaced NAs with 0
+  arrange(site)
+
+#Turn abundances for each species into a binary present/absent (1/0).
+rep_com_binary <- reptile_community4 %>%
+  select(where(is.numeric)) %>%
+  decostand(method="pa", MARGIN = 1) %>% 
+  cbind(reptile_community4[,c(2,4)]) %>% 
+  select(site.plot, assessment.method, everything())
+
+#Make data frame with each method for each site.plot
+all.methods <- cbind.data.frame(site.plot=rep(unique(rep_com_binary$site.plot),each=6),asssessment.method=rep(unique(rep_com_binary$assessment.method),24))
+
+#Add merged column
+all.methods$site.plot.method <- paste(all.methods$site.plot,all.methods$asssessment.method)
+
+#Find site.plot.methods that are missing from the rep_com_binary because they never documented any species at that plot
+missing <- setdiff(all.methods$site.plot.method,paste(rep_com_binary$site.plot,rep_com_binary$assessment.method))
+
+#Make data frame of those missing values with a zero filled in for each species
+missing <- cbind.data.frame(all.methods[which(all.methods$site.plot.method %in% missing),1:2],as.data.frame(matrix(0, ncol=ncol(rep_com_binary)-2, nrow=length(missing))))
+colnames(missing) <- colnames(rep_com_binary)
+
+#Add missing entries
+rep_com_binary <- rep_com_binary %>% 
+  bind_rows(missing)
+     
+#Convert to long format
+rep_com_binary.long <- melt(rep_com_binary,id=c("site.plot","assessment.method")) %>% 
+  rename(scientific.name = variable)
+
+#Get a count of days when a species was present for a given method for a given plot
+days.present <- rep_com_binary.long %>% 
+  group_by(site.plot,assessment.method,scientific.name) %>% 
+  dplyr::summarize(days.present = sum(value,na.rm=T))
+
+#Add the survey days information (days surveyed)
+survey_days <- read.csv("survey_days.csv")
+days.present <- merge(days.present,survey_days,by="site.plot",all.x=T,all.y=T)
+
+#Make a new column that is the total number of days a species was present per plot, summed across all methods and exclude plots where species was never found.
+days.present <- days.present %>% 
+  group_by(site.plot,scientific.name) %>% 
+  mutate(count.per.site.plot = sum(days.present,na.rm=T),
+         assessment.method = factor(assessment.method, levels = c("pitfall", "funnel","incidentals","spotlighting","cover board","camera"))) %>% 
+  filter(count.per.site.plot > 0) %>% #Remove plots where species were never found
+  select(-count.per.site.plot) %>% 
+  mutate(det.prob = days.present/days) %>% #Probability of detecting a species via a given method at a given plot.
+  ungroup()
+```
+
+This data frame now contains rows for species only for the plots where it was found but for each plot where it was found, it contains rows for each method, regardless whether that method detected it or not.
+
+The `days.present` column shows the number of days when a species was detected in that plot by that method, the `days` column shows the number of days when that method was used at that plot and the `det.prob` column shows the probability of detecting a species via that method at that plot.
+
+Include lifestyle information.
+
+```{r Data preparation: lifestyle information}
+#Join with data frame that has plot and coordinate information
+det.plot <- days.present %>% 
+  left_join(coord)
+
+#Lifestyles for species per plot
+det.plot.groups <- det.plot %>%
+  mutate(assessment.method = factor(assessment.method, levels = c("pitfall", "funnel", "incidentals",
+                                                                  "spotlighting",
+                                                                  "cover board","camera"))) %>%
+  add_column(lifestyle = ifelse(.$scientific.name %in% c("Cryptoblepharus australis",
+                                                         "Cryptoblepharus pannosus",
+                                                   "Diplodactylus vittatus", "Gehyra dubia",
+                                                   "Amalosia rhombifer", "Cryptoblepharus adamsi",
+                                                   "Cryptoblepharus metallicus", "Oedura castelnaui",
+                                                   "Cryptoblepharus virgatus", "Chlamydosaurus kingii",
+                                                   "Varanus tristis", "Strophurus williamsi",
+                                                   "Oedura coggeri", "Varanus scalaris",
+                                                   "Egernia striolata", "Christinus marmoratus",
+                                                   "Boiga irregularis", "Hoplocephalus bitorquatus"),
+                                "Arboreal Species", "Ground-dwelling Species"))
+```
+
+## Bayesian Analysis - across all methods for all reptiles
+
+### Priors
+Defining priors for Bayesian models.
+
+Priors for the intercept.
+```{r}
+det.plot.groups %>% 
+  filter(days.present > 0) %>% 
+  summarise(median(days.present))
+#2
+det.plot.groups %>% 
+  filter(days.present > 0) %>%
+  summarise(mad(days.present))
+#1.5
+```
+
+Priors for the slope.
+```{r}
+sd(det.plot.groups$days.present)/apply(model.matrix(~assessment.method*lat, data = det.plot.groups), 2, sd)
+#4.7 <- too high, let's go for 1.5
+```
+
+### Fit model
+
+#### Model 1
+```{r}
+priors1 <- prior(normal(2,1.5), class  = "Intercept") +
+  prior(normal(0,1.5), class = "b") +
+  prior(student_t(3,0,1.5), class = "sd")
+
+methods.form1 <- bf(days.present ~ assessment.method*lat + offset(log(days)) + (1|site/site.plot) +
+                      (1|scientific.name), family=poisson(link='log'))
+
+methods.det.brm1 <- brm(methods.form1,
+                  data = det.plot.groups,
+                  prior = priors1,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 1,
+                  warmup = 1000,
+                  backend = 'cmdstanr')
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm1 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm1 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.det.brm1b <- methods.det.brm1 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 1,
+         cores = 3,
+         backend = "cmdstanr")
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm1b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm1b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Model 2
+```{r}
+priors1 <- prior(normal(2,1.5), class  = "Intercept") +
+  prior(normal(0,1.5), class = "b") +
+  prior(student_t(3,0,1.5), class = "sd")
+
+methods.form2 <- bf(days.present ~ assessment.method*lat + offset(log(days)) + (1|site/site.plot) +
+                      (1|scientific.name), family="negbinomial")
+
+methods.det.brm2 <- brm(methods.form2,
+                  data = det.plot.groups,
+                  prior = priors1,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 1,
+                  warmup = 1000,
+                  backend = 'cmdstanr')
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm2 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm2 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.det.brm2b <- methods.det.brm2 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 1,
+         cores = 3,
+         backend = "cmdstanr")
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm2b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm2b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Model 3
+```{r}
+priors1 <- prior(normal(2,1.5), class  = "Intercept") +
+  prior(normal(0,1.5), class = "b") +
+  prior(student_t(3,0,1.5), class = "sd")
+
+methods.form3 <- bf(days.present ~ assessment.method*lat + offset(log(days)) + (1|site/site.plot) +
+                      (1|scientific.name), family="negbinomial2")
+
+methods.det.brm3 <- brm(methods.form3,
+                  data = det.plot.groups,
+                  prior = priors1,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 1,
+                  warmup = 1000,
+                  backend = 'cmdstanr')
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm3 %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm3 %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.det.brm3b <- methods.det.brm3 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 1,
+         cores = 3,
+         backend = "cmdstanr")
+```
+
+##### Predictions
+
+```{r}
+methods.det.brm3b %>% ggpredict(~assessment.method|lat) %>% plot(add.data = TRUE)
+methods.det.brm3b %>% ggpredict(~lat|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Compare Models
+
+```{r}
+(m.1b <- methods.det.brm1b %>% loo())
+```
+
+```{r}
+(m.2b <- methods.det.brm2b %>% loo())
+```
+
+```{r}
+(m.3b <- methods.det.brm3b %>% loo())
+```
+
+```{r}
+loo_compare(loo(methods.det.brm1b), loo(methods.det.brm2b), loo(methods.det.brm3b))
+```
+
+Model `methods.det.brm2b` was selected as best model based on loo estimates.
+
+### Diagnostics
+
+#### Trace plots
+
+```{r}
+methods.det.brm2b$fit %>% stan_trace()
+```
+#### Autocorrelation plots
+
+```{r}
+methods.det.brm2b$fit %>% stan_ac()
+```
+#### Rhat statistic
+
+```{r}
+methods.det.brm2b$fit %>% stan_rhat()
+```
+#### Effective sampling size
+
+```{r}
+methods.det.brm2b$fit %>% stan_ess()
+```
+#### Posterior predictive check plot
+
+```{r}
+methods.det.brm2b %>% pp_check(x="lat", type="intervals")
+```
+#### DHARMa residuals
+
+```{r}
+set.seed(5)
+preds <- posterior_predict(methods.det.brm2b,  ndraws=250,  summary=FALSE)
+method.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = det.plot.groups$days.present,
+                            fittedPredictedResponse = apply(preds, 2, median),
+                            integerResponse = TRUE)
+method.resids %>% plot()
+```
+#### Dispersion test
+
+```{r}
+method.resids %>% testDispersion()
+```
+#### Zero-inflation test
+
+```{r}
+method.resids %>% testZeroInflation()
+```
+
+### Investigation
+
+#### Methods pairwise comparison for the average latitude
+
+```{r}
+(diff.det.meth.avg <- methods.det.brm2b %>%
+  emmeans(~assessment.method|lat) %>% 
+  regrid() %>%
+  pairs() %>% 
+  gather_emmeans_draws() %>% 
+  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
+  summarise("Average difference (%)" = median(Percent),
+            "Average fractional change" = median(f.change),
+            "Lower HDI" = HDInterval::hdi(f.change)[1],
+            "Upper HDI" = HDInterval::hdi(f.change)[2],
+            "Probability of difference" = sum(.value > 0)/n()) %>% 
+   select(-lat))
+```
+
+## Bayesian Analysis - across all methods for arboreal vs ground-dwelling reptiles
+
+### Fit model
+
+#### Model 1
+```{r}
+priors1 <- prior(normal(2,1.5), class  = "Intercept") +
+  prior(normal(0,1.5), class = "b") +
+  prior(student_t(3,0,1.5), class = "sd")
+
+methods.form1 <- bf(days.present ~ assessment.method*lifestyle + offset(log(days)) + (1|site/site.plot) +
+                      (1|scientific.name), family="negbinomial")
+
+methods.det.life.brm1 <- brm(methods.form1,
+                  data = det.plot.groups,
+                  prior = priors1,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 8,
+                  warmup = 1000,
+                  backend = 'cmdstanr')
+```
+
+##### Predictions
+
+```{r}
+methods.det.life.brm1 %>% ggpredict(~assessment.method|lifestyle) %>% plot(add.data = TRUE)
+methods.det.life.brm1 %>% ggpredict(~lifestyle|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.det.life.brm1b <- methods.det.life.brm1 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 8,
+         cores = 3,
+         backend = "cmdstanr")
+```
+
+##### Predictions
+
+```{r}
+methods.det.life.brm1b %>% ggpredict(~assessment.method|lifestyle) %>% plot(add.data = TRUE)
+methods.det.life.brm1b %>% ggpredict(~lifestyle|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Model 2
+```{r}
+priors2 <- prior(normal(2,1.5), class  = "Intercept") +
+  prior(normal(0,1.5), class = "b") +
+  prior(student_t(3,0,1.5), class = "sd")
+
+methods.form2 <- bf(days.present ~ assessment.method*lifestyle + offset(log(days)) + (1|site/site.plot) +
+                      (1|scientific.name), family="negbinomial2")
+
+methods.det.life.brm2 <- brm(methods.form2,
+                  data = det.plot.groups,
+                  prior = priors2,
+                  sample_prior = "only",
+                  refresh = 0,
+                  chains = 3, cores = 3,
+                  iter = 5000,
+                  thin = 5,
+                  seed = 8,
+                  warmup = 1000,
+                  backend = 'cmdstanr')
+```
+
+##### Predictions
+
+```{r}
+methods.det.life.brm2 %>% ggpredict(~assessment.method|lifestyle) %>% plot(add.data = TRUE)
+methods.det.life.brm2 %>% ggpredict(~lifestyle|assessment.method) %>% plot(add.data = TRUE)
+```
+
+##### Prior vs Posterior {.tabset .tabset-pills}
+
+```{r}
+methods.det.life.brm2b <- methods.det.life.brm2 %>%
+  update(sample_prior = "yes",
+         refresh = 0,
+         seed = 8,
+         cores = 3,
+         backend = "cmdstanr")
+```
+
+##### Predictions
+
+```{r}
+methods.det.life.brm2b %>% ggpredict(~assessment.method|lifestyle) %>% plot(add.data = TRUE)
+methods.det.life.brm2b %>% ggpredict(~lifestyle|assessment.method) %>% plot(add.data = TRUE)
+```
+
+#### Compare Models
+
+```{r}
+(m.1b <- methods.det.life.brm1b %>% loo())
+```
+
+```{r}
+(m.2b <- methods.det.life.brm2b %>% loo())
+```
+
+```{r}
+loo_compare(loo(methods.det.life.brm1b), loo(methods.det.life.brm2b))
+```
+
+Model `methods.det.life.brm1b` was selected as best model based on loo estimates.
+
+### Diagnostics
+
+#### Trace plots
+
+```{r}
+methods.det.life.brm1b$fit %>% stan_trace()
+```
+#### Autocorrelation plots
+
+```{r}
+methods.det.life.brm1b$fit %>% stan_ac()
+```
+#### Rhat statistic
+
+```{r}
+methods.det.life.brm1b$fit %>% stan_rhat()
+```
+#### Effective sampling size
+
+```{r}
+methods.det.life.brm1b$fit %>% stan_ess()
+```
+
+#### DHARMa residuals
+
+```{r}
+set.seed(5)
+preds <- posterior_predict(methods.det.life.brm2b,  ndraws=250,  summary=FALSE)
+method.resids <- createDHARMa(simulatedResponse = t(preds),
+                            observedResponse = det.plot.groups$days.present,
+                            fittedPredictedResponse = apply(preds, 2, median),
+                            integerResponse = TRUE)
+method.resids %>% plot()
+```
+#### Dispersion test
+
+```{r}
+method.resids %>% testDispersion()
+```
+#### Zero-inflation test
+
+```{r}
+method.resids %>% testZeroInflation()
+```
+
+### Investigation
+
+```{r Difference between detectability of methods for different reptile lifestyles}
+(diff.det.life.meth <- methods.det.life.brm2b %>%
+  emmeans(~assessment.method|lifestyle) %>% 
+  regrid() %>%
+  pairs() %>% 
+  #pairs(reverse = TRUE) %>% to reverse the contrasts 
+  gather_emmeans_draws() %>% 
+  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>%
+  summarise("Average fractional change" = median(f.change),
+            "Lower HDI" = HDInterval::hdi(f.change)[1],
+            "Upper HDI" = HDInterval::hdi(f.change)[2],
+            "Probability of difference" = sum(.value > 0)/n()) %>% 
+  arrange(lifestyle))
+```
+
+## Visualisation
+```{r Detectability per lifestyle per plot}
+
+pal <- c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8")
+
+(det.life.plot <- ggplot(det.plot.groups, aes(x=assessment.method,y=det.prob)) +
+  geom_boxplot(aes(color = assessment.method,
+                   color = after_scale(darken(color, .1, space = "HLS")),
+                   fill = after_scale(desaturate(lighten(color, .8), .4))),
+             width = .2, outlier.shape = NA) +
+  gghalves::geom_half_point(aes(color = assessment.method, color = after_scale(darken(color, .1, space = "HLS"))), fill = "white", shape = 21, stroke = .4, size = 2, side = "1",
+                            transformation = PositionIdentity) +
+    gghalves::geom_half_point(aes(fill = assessment.method), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3, side = "1", transformation = PositionIdentity) +
+  facet_wrap(~lifestyle) +
+  scale_y_continuous(labels = scales::percent,
+                     breaks = seq(0, 0.9, by = 0.1),
+                     limits = c(0,0.9),
+                     name = "Detection Probability") +
+  scale_x_discrete(name = "", guide = "none") +
+  scale_fill_manual(values = pal, guide = "none") +
+  scale_colour_manual(values = pal, name = "", labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
+  my.theme() +
+  theme(panel.grid.major.y = element_line(colour = "grey", linewidth = 0.2, linetype = "dotted"),
+        panel.grid.minor.y = element_line(colour = "grey", linewidth = 0.1, linetype = "dotted"),
+        legend.position = c(0.5, -0.07),
+        legend.background = element_rect(fill = "transparent"),
+        legend.direction = "horizontal",
+        plot.margin = unit(c(5, 10, 12, 10), units = "mm"),
+        panel.border = element_rect(fill = NA, color = "black"),
+        strip.background = element_rect(fill = "lightgrey")))
+```
+
+# Session Info
+```{r}
+sessionInfo()
+```
+
+# Cite Packages
+```{r}
+cite_packages()
+```
