@@ -431,9 +431,11 @@ newdata_lat <- with(reptile_summary_all,list(lat = c(-35.37876,-30.40221,-27.778
   select(-lat))
 ```
 
-### Summary Plot
+### Visualisation
 
-```{r fractional change}
+Fractional change
+
+```{r fractional change, fig.height = 12/1.66, fig.width = 12, warning=FALSE}
 methods.em <- methods.brm1b %>%
   emmeans(~assessment.method|lat) %>% 
   pairs() %>% 
@@ -453,8 +455,9 @@ methods.em <- methods.brm1b %>%
     my.theme())
 ```
 
+Proportion of richness across latitudes
 
-```{r Proportion of richness across latitudes}
+```{r Proportion of richness across latitudes, fig.height = 12/1.66, fig.width = 12, warning=FALSE}
 lat.list <- with(reptile_summary_all, list(lat = seq(min(lat), max(lat), length = 100)))
 
 newdata <- emmeans(methods.brm1b, ~lat|assessment.method, at=lat.list, type = "response") %>%
@@ -503,7 +506,7 @@ reptile_summary_all_prop <- reptile_summary_all %>%
   guides(colour = guide_legend(nrow = 1)) +
   annotate("text", x = c(-35.37876,-30.40221,-27.77876,-20.53459,-18.26553,-15.04439),
            y = c(rep(-0.025, 6)),
-           label = c("Tarcutta","Duval","Mourachan","Wambiana","Undara","Rinyirru")))
+           label = c("Tarcutta","Duval","Mourachan","Wambiana","Undara","Rinyirru"), size = 5))
 ```
 
 ### Report
@@ -671,7 +674,7 @@ mutate(assessment.method = factor(assessment.method, levels = c("pitfall",
 
 Plot of rarefaction curves for each method split by sites.
 
-```{r}
+```{r, fig.height = 20/1.66, fig.width = 20}
 (specaccum_reptiles <- ggplot(reptiles_wide.result, aes(x = day, y = richness, col = assessment.method)) + 
   geom_ribbon(aes(ymin = lower.ci, ymax = upper.ci,fill=after_scale(alpha(colour, 0.3))),
               linetype = 0.1) +
@@ -680,12 +683,12 @@ Plot of rarefaction curves for each method split by sites.
   my.theme() +
   facet_wrap(~site) +
   theme(panel.border = element_rect(fill = NA, color = "black", linewidth = 1.5),
-        panel.grid.major.y = element_line("lightgrey", linewidth = 0.2, linetype = "solid"),
         strip.background = element_rect(fill = "lightgrey"),
-        axis.title = element_text(size = 22),
-        legend.title = element_text(size = 20),
-        legend.text = element_text(size = 20),
-        legend.position = "bottom") +
+        axis.title = element_text(size = 26),
+        axis.text = element_text(size = 26),
+        legend.text = element_text(size = 26),
+        legend.position = "bottom",
+        strip.text.x = element_text(size = 26)) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.07)), breaks = seq(0, 45, by = 5),
                      name = "Species Richness") +
   scale_x_continuous(breaks = seq(0, 28, by = 7),
@@ -781,6 +784,7 @@ rep_com_jacc_all <- all %>%
 
 ### Bray-Curtis dissimilarity
 ```{r, results='hide'}
+set.seed(1)
 all_nmds_bray <-  metaMDS(rep_com_bray_all, distance="bray", k=3,trymax=100, noshare=0.1)
 rin_nmds_bray <-  metaMDS(rep_com_bray_rin, distance="bray", k=2,trymax=100)
 und_nmds_bray <-  metaMDS(rep_com_bray_und, distance="bray", k=2,trymax=100)
@@ -794,6 +798,7 @@ tar_nmds_bray <-  metaMDS(rep_com_bray_tar, distance="bray", k=2,trymax=100)
 
 ### Jaccard dissimilarity
 ```{r, results='hide'}
+set.seed(11)
 all_nmds_jacc <-  metaMDS(rep_com_jacc_all, distance="jaccard", k=2,trymax=100, noshare=0.1)
 rin_nmds_jacc <-  metaMDS(rep_com_jacc_rin, distance="jaccard", k=2,trymax=100)
 und_nmds_jacc <-  metaMDS(rep_com_jacc_und, distance="jaccard", k=2,trymax=100)
@@ -809,276 +814,68 @@ tar_nmds_jacc <-  metaMDS(rep_com_jacc_tar, distance="jaccard", k=2,trymax=100)
 
 ### Bray-Curtis dissimilarity
 
-```{r}
-all.methods <- all_nmds_bray$points
-all.species <- as.data.frame(all_nmds_bray$species) %>% 
-  mutate(species = row.names(.))
-all2 <- all[,1:3]
-rep_com_bray_all2 <- cbind.data.frame(all2, all.methods)
+```{r, fig.height = 12/1.66, fig.width = 12}
+create_plot <- function(data, nmds_data) {
+  methods <- nmds_data$points
+  species <- as.data.frame(nmds_data$species) %>% mutate(species = row.names(.))
+  df <- cbind.data.frame(data[,1:3], methods)
+  gg <- merge(df, aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method, df, mean), by="assessment.method") %>%
+    mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+  ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+    geom_point(size=3) +
+    geom_point(aes(x=mean.x,y=mean.y),size=5) +
+    scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8"),
+                        name = "",
+                        labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
+    geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+    my.theme() + theme(legend.position = "bottom")
+}
 
+mds.all.plot.bray.centroid <- create_plot(all, all_nmds_bray)
+mds.rin.plot.bray.centroid <- create_plot(rin, rin_nmds_bray)
+mds.und.plot.bray.centroid <- create_plot(und, und_nmds_bray)
+mds.wam.plot.bray.centroid <- create_plot(wam, wam_nmds_bray)
+mds.mou.plot.bray.centroid <- create_plot(mou, mou_nmds_bray)
 
-gg <- merge(rep_com_bray_all2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_all2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.all.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-rin.methods <- rin_nmds_bray$points
-rin.species <- as.data.frame(rin_nmds_bray$species) %>% 
-  mutate(species = row.names(.))
-rin2 <- rin[,1:3]
-rep_com_bray_rin2 <- cbind.data.frame(rin2, rin.methods)
-
-
-gg <- merge(rep_com_bray_rin2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_rin2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.rin.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-und.methods <- und_nmds_bray$points
-und.species <- as.data.frame(und_nmds_bray$species) %>% 
-  mutate(species = row.names(.))
-und2 <- und[,1:3]
-rep_com_bray_und2 <- cbind.data.frame(und2, und.methods)
-
-
-gg <- merge(rep_com_bray_und2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_und2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.und.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-wam.methods <- wam_nmds_bray$points
-wam.species <- as.data.frame(wam_nmds_bray$species) %>% 
-  mutate(species = row.names(.))
-wam2 <- wam[,1:3]
-rep_com_bray_wam2 <- cbind.data.frame(wam2, wam.methods)
-
-
-gg <- merge(rep_com_bray_wam2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_wam2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.wam.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-mou.methods <- mou_nmds_bray$points
-mou.species <- as.data.frame(mou_nmds_bray$species) %>% 
-  mutate(species = row.names(.))
-mou2 <- mou[,1:3]
-rep_com_bray_mou2 <- cbind.data.frame(mou2, mou.methods)
-
-
-gg <- merge(rep_com_bray_mou2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_bray_mou2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.mou.plot.bray.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-(mds.bray.all <- (mds.all.plot.bray.centroid + 
-  ggtitle('All sites') & theme(legend.position = "none")) +
-   (mds.rin.plot.bray.centroid + 
-  ggtitle('Rinyirru') & theme(legend.position = "none")) +
-   (mds.und.plot.bray.centroid + 
-  ggtitle('Undara') & theme(legend.position = "none")) +
-   (mds.wam.plot.bray.centroid + 
-  ggtitle('Wambiana') & theme(legend.position = "none")) +
-   (mds.mou.plot.bray.centroid + 
-  ggtitle('Mourachan') & theme(legend.position = "none")) + 
-   plot_annotation(tag_levels = "A", tag_suffix = ')') + 
-   theme(legend.position = c(2,0.65), legend.text = element_text(size = 18)))
+(mds.bray.all <- (mds.all.plot.bray.centroid + ggtitle('All sites') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.rin.plot.bray.centroid + ggtitle('Rinyirru') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.und.plot.bray.centroid + ggtitle('Undara') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.wam.plot.bray.centroid + ggtitle('Wambiana') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.mou.plot.bray.centroid + ggtitle('Mourachan') & theme(legend.position = "none", plot.title = element_text(size = 24))) + 
+   theme(legend.position = c(2,0.65), legend.text = element_text(size = 24)))
 ```
 
 ### Jaccard dissimilarity
 
-```{r}
-all.methods.jacc <- all_nmds_jacc$points
-all.species.jacc <- as.data.frame(all_nmds_jacc$species) %>% 
-  mutate(species = row.names(.))
-all2 <- all[,1:3]
-rep_com_jacc_all2 <- cbind.data.frame(all2, all.methods.jacc)
+```{r, fig.height = 12/1.66, fig.width = 12}
+create_plot <- function(data, nmds_data) {
+  methods <- nmds_data$points
+  species <- as.data.frame(nmds_data$species) %>% mutate(species = row.names(.))
+  df <- cbind.data.frame(data[,1:3], methods)
+  gg <- merge(df, aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method, df, mean), by="assessment.method") %>%
+    mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
+  ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
+    geom_point(size=3) +
+    geom_point(aes(x=mean.x,y=mean.y),size=5) +
+    scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8"),
+                        name = "",
+                        labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
+    geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
+    my.theme() + theme(legend.position = "bottom")
+}
 
+mds.all.plot.jacc.centroid <- create_plot(all, all_nmds_jacc)
+mds.rin.plot.jacc.centroid <- create_plot(rin, rin_nmds_jacc)
+mds.und.plot.jacc.centroid <- create_plot(und, und_nmds_jacc)
+mds.wam.plot.jacc.centroid <- create_plot(wam, wam_nmds_jacc)
+mds.mou.plot.jacc.centroid <- create_plot(mou, mou_nmds_jacc)
 
-gg <- merge(rep_com_jacc_all2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_all2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.all.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-rin.methods <- rin_nmds_jacc$points
-rin.species <- as.data.frame(rin_nmds_jacc$species) %>% 
-  mutate(species = row.names(.))
-rin2 <- rin[,1:3]
-rep_com_jacc_rin2 <- cbind.data.frame(rin2, rin.methods)
-
-
-gg <- merge(rep_com_jacc_rin2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_rin2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.rin.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-und.methods <- und_nmds_jacc$points
-und.species <- as.data.frame(und_nmds_jacc$species) %>% 
-  mutate(species = row.names(.))
-und2 <- und[,1:3]
-rep_com_jacc_und2 <- cbind.data.frame(und2, und.methods)
-
-
-gg <- merge(rep_com_jacc_und2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_und2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.und.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-wam.methods <- wam_nmds_jacc$points
-wam.species <- as.data.frame(wam_nmds_jacc$species) %>% 
-  mutate(species = row.names(.))
-wam2 <- wam[,1:3]
-rep_com_jacc_wam2 <- cbind.data.frame(wam2, wam.methods)
-
-
-gg <- merge(rep_com_jacc_wam2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_wam2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.wam.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-mou.methods <- mou_nmds_jacc$points
-mou.species <- as.data.frame(mou_nmds_jacc$species) %>% 
-  mutate(species = row.names(.))
-mou2 <- mou[,1:3]
-rep_com_jacc_mou2 <- cbind.data.frame(mou2, mou.methods)
-
-
-gg <- merge(rep_com_jacc_mou2,aggregate(cbind(mean.x=MDS1,mean.y=MDS2)~assessment.method,rep_com_jacc_mou2,mean),by="assessment.method") %>% 
-  mutate(assessment.method = factor(assessment.method, levels = c("pitfall","funnel","incidentals","spotlighting","cover board","camera","total")))
-
-(mds.mou.plot.jacc.centroid <- ggplot(gg, aes(MDS1,MDS2,color=assessment.method)) +
-  geom_point(size=3) +
-  geom_point(aes(x=mean.x,y=mean.y),size=5) +
-  scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8","#FBA6EA"),
-                      name = "",
-                      labels = c("Pitfall Trap","Funnel Trap","Incidental",
-                                 "Spotlighting","Arboreal Cover Board",
-                                 "Camera Trap")) +
-  geom_segment(aes(x=mean.x, y=mean.y, xend=MDS1, yend=MDS2), alpha = 0.2, linewidth = 1.5) +
-  my.theme() +
-    theme(legend.position = "bottom"))
-```
-
-```{r}
-(mds.jacc.all <- (mds.all.plot.jacc.centroid + 
-  ggtitle('All sites') & theme(legend.position = "none")) +
-   (mds.rin.plot.jacc.centroid + 
-  ggtitle('Rinyirru') & theme(legend.position = "none")) +
-   (mds.und.plot.jacc.centroid + 
-  ggtitle('Undara') & theme(legend.position = "none")) +
-   (mds.wam.plot.jacc.centroid + 
-  ggtitle('Wambiana') & theme(legend.position = "none")) +
-   (mds.mou.plot.jacc.centroid + 
-  ggtitle('Mourachan') & theme(legend.position = "none")) + 
-   plot_annotation(tag_levels = "A", tag_suffix = ')') + 
-   theme(legend.position = c(2,0.65), legend.text = element_text(size = 18)))
+(mds.jacc.all <- (mds.all.plot.jacc.centroid + ggtitle('All sites') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.rin.plot.jacc.centroid + ggtitle('Rinyirru') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.und.plot.jacc.centroid + ggtitle('Undara') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.wam.plot.jacc.centroid + ggtitle('Wambiana') & theme(legend.position = "none", plot.title = element_text(size = 24))) +
+   (mds.mou.plot.jacc.centroid + ggtitle('Mourachan') & theme(legend.position = "none", plot.title = element_text(size = 24))) + 
+   theme(legend.position = c(2,0.65), legend.text = element_text(size = 24)))
 ```
 
 ## Investigation
@@ -1644,7 +1441,7 @@ method.resids %>% testZeroInflation()
 ```
 
 ## Visualisation
-```{r Detectability per lifestyle per plot}
+```{r Detectability per lifestyle per plot, fig.height = 12/1.66, fig.width = 13}
 
 pal <- c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8")
 
@@ -1652,10 +1449,10 @@ pal <- c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8")
   geom_boxplot(aes(color = assessment.method,
                    color = after_scale(darken(color, .1, space = "HLS")),
                    fill = after_scale(desaturate(lighten(color, .8), .4))),
-             width = .2, outlier.shape = NA) +
-  gghalves::geom_half_point(aes(color = assessment.method, color = after_scale(darken(color, .1, space = "HLS"))), fill = "white", shape = 21, stroke = .4, size = 2, side = "1",
+             width = .6, outlier.shape = NA) +
+  geom_point(aes(color = assessment.method, color = after_scale(darken(color, .1, space = "HLS"))), fill = "white", shape = 21, stroke = .4, size = 3.5, side = "1",
                             transformation = PositionIdentity) +
-    gghalves::geom_half_point(aes(fill = assessment.method), color = "transparent", shape = 21, stroke = .4, size = 2, alpha = .3, side = "1", transformation = PositionIdentity) +
+  geom_point(aes(fill = assessment.method), color = "transparent", shape = 21, stroke = .4, size = 3.5, alpha = .3, side = "1", transformation = PositionIdentity) +
   facet_wrap(~lifestyle) +
   scale_y_continuous(labels = scales::percent,
                      breaks = seq(0, 0.9, by = 0.1),
