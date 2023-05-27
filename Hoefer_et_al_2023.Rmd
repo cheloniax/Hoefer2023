@@ -18,42 +18,22 @@ knitr::opts_chunk$set(message=FALSE, warning=TRUE,
 Load packages needed for data manipulation and analyses.
 
 ```{r Load packages}
+library(knitr)      #for markdown knitting
 library(tidyverse)  #for data wrangling etc
+library(colorspace) #for working with colours in visualisations
 library(cmdstanr)   #for cmdstan
 library(brms)       #for fitting models in STAN
-library(standist)   #for exploring distributions - *******must come after tidyverse********
-library(coda)       #for diagnostics
-library(bayesplot)  #for diagnostics
-library(DHARMa)     #for residual diagnostics
 library(rstan)      #for interfacing with STAN
-library(emmeans)    #for marginal means etc
-library(broom)      #for tidying outputs
-library(tidybayes)  #for more tidying outputs
-library(HDInterval) #for HPD intervals
-library(ggeffects)  #for partial plots
-library(broom.mixed)#for summarising models
-library(posterior)  #for posterior draws
 library(ggeffects)  #for partial effects plots
+library(DHARMa)     #for residual diagnostics
+library(emmeans)    #for marginal means etc
+library(tidybayes)  #for more tidying outputs
+library(ggridges)   #for creating ridge plots
+library(vegan)      #for analysing ecological data
+library(EcolUtils)  #for analysing ecological data
 library(patchwork)  #for multi-panel figures
-library(bayestestR) #for ROPE
-library(see)        #for some plots
-library(reshape2)
-library(vegan)
-library(car)
-library(ggvegan)
-library(ggrepel)
-library(GGally)
-library(corrplot)
-library(EcolUtils)
-library(scales)
-library(colorspace)
-library(MuMIn)
-library(knitr)
+library(HDInterval) #for HPD intervals
 library(report)
-library(ggridges)
-library(gghalves)
-library(loo)
-library(performance)
 ```
 
 # Functions
@@ -396,14 +376,12 @@ method.resids %>% testZeroInflation()
 newdata_lat <- with(reptile_summary_all,list(lat = c(-35.37876,-30.40221,-27.77876,
                                                      -20.53459,-18.26553,-15.04439)))
 
-(diff.methods <- methods.brm1b %>%
+(diff.methods3 <- methods.brm1b %>%
   emmeans(~assessment.method|lat, at = newdata_lat) %>%
-  regrid() %>% #to get on absolute scale: richness
   pairs() %>% 
   gather_emmeans_draws() %>% 
-  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
-  summarise("Average difference (%)" = median(Percent),
-            "Average fractional change" = median(f.change),
+  mutate(f.change = exp(.value)) %>% 
+  summarise("Average fractional change" = median(f.change),
             "Lower HDI" = HDInterval::hdi(f.change)[1],
             "Upper HDI" = HDInterval::hdi(f.change)[2],
             "Probability of difference" = sum(.value > 0)/n()) %>% #to see if there is any change
@@ -422,9 +400,8 @@ newdata_lat <- with(reptile_summary_all,list(lat = c(-35.37876,-30.40221,-27.778
   emmeans(~assessment.method|lat) %>% 
   pairs() %>% 
   gather_emmeans_draws() %>% 
-  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
-  summarise("Average difference (%)" = median(Percent),
-            "Average fractional change" = median(f.change),
+  mutate(f.change = exp(.value)) %>% 
+  summarise("Average fractional change" = median(f.change),
             "Lower HDI" = HDInterval::hdi(f.change)[1],
             "Upper HDI" = HDInterval::hdi(f.change)[2],
             "Probability of difference" = sum(.value > 0)/n()) %>% 
@@ -449,7 +426,7 @@ methods.em <- methods.brm1b %>%
                                quantile_lines = TRUE, quantiles = c(0.025, 0.975),
                                show.legend = FALSE, fill = "#05596E") +
   geom_vline(xintercept = 1, linetype = "dashed") +
-  scale_x_continuous("Fractional change", trans = scales::log2_trans(),
+  scale_x_continuous("Fractional change", trans = "log2",
                      breaks = c(1, 2, 5, 10, 50)) +
   scale_y_discrete(name = "") +
     my.theme())
@@ -500,19 +477,13 @@ reptile_summary_all_prop <- reptile_summary_all %>%
                       name = "Sampling Methods", labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
   scale_colour_manual(values = c("#FF8300", "#D14103","#0CC170","black","#4E84C4","#8348D8"),
                       name = "", labels = c("Pitfall Trap","Funnel Trap","Incidental","Spotlighting","Arboreal Cover Board","Camera Trap")) +
-  theme(legend.text = element_text(margin = margin(t = 5)),
-        legend.position = c(y=0.5, x=-0.07),
+  theme(legend.text = element_text(size = 16, margin = margin(t = 5)),
+        legend.position = c(y=0.45, x=-0.07),
         legend.background = element_rect(fill = "transparent")) +
   guides(colour = guide_legend(nrow = 1)) +
   annotate("text", x = c(-35.37876,-30.40221,-27.77876,-20.53459,-18.26553,-15.04439),
            y = c(rep(-0.025, 6)),
            label = c("Tarcutta","Duval","Mourachan","Wambiana","Undara","Rinyirru"), size = 5))
-```
-
-### Report
-
-```{r report package}
-report(methods.brm1b)
 ```
 
 # Survey Effort
@@ -890,7 +861,7 @@ all.dist <- vegdist(all[4:ncol(all)], 'bray')
 #Permutation test: significant difference between assessment methods for reptile communities.
 
 #Let's which method is different from which
-(adonis.methods.bray <- EcolUtils::adonis.pair(all.dist, all$assessment.method))
+(adonis.methods.bray <- adonis.pair(all.dist, all$assessment.method))
 #comparing all methods with each other
 #evidence that everything but pitfall vs funnel traps capture significantly different reptile communities.
 ```
@@ -903,7 +874,7 @@ all.dist2 <- vegdist(rep_com_jacc_all, 'jaccard')
 #Permutation test: significant difference between assessment methods for reptile communities.
 
 #Let's which method is different from which
-(adonis.methods.jacc <- EcolUtils::adonis.pair(all.dist2, all$assessment.method))
+(adonis.methods.jacc <- adonis.pair(all.dist2, all$assessment.method))
 #comparing all methods with each other
 #evidence that everything but pitfall vs funnel traps capture significantly different reptile communities.
 
@@ -958,13 +929,13 @@ rep_com_binary <- rep_com_binary %>%
   bind_rows(missing)
      
 #Convert to long format
-rep_com_binary.long <- melt(rep_com_binary,id=c("site.plot","assessment.method")) %>% 
-  rename(scientific.name = variable)
+rep_com_binary.long <- pivot_longer(rep_com_binary, cols = -c(site.plot, assessment.method),
+                                    names_to = "scientific.name", values_to = "value")
 
 #Get a count of days when a species was present for a given method for a given plot
 days.present <- rep_com_binary.long %>% 
   group_by(site.plot,assessment.method,scientific.name) %>% 
-  dplyr::summarize(days.present = sum(value,na.rm=T))
+  summarize(days.present = sum(value,na.rm=T))
 
 #Add the survey days information (days surveyed)
 survey_days <- read.csv("survey_days.csv")
@@ -1252,12 +1223,11 @@ method.resids %>% testZeroInflation()
 ```{r}
 (diff.det.meth.avg <- methods.det.brm2b %>%
   emmeans(~assessment.method|lat) %>% 
-  regrid() %>%
+  regrid(transform = "none") %>% 
   pairs() %>% 
   gather_emmeans_draws() %>% 
-  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>% 
-  summarise("Average difference (%)" = median(Percent),
-            "Average fractional change" = median(f.change),
+  mutate(f.change = exp(.value)) %>% 
+  summarise("Average fractional change" = median(f.change),
             "Lower HDI" = HDInterval::hdi(f.change)[1],
             "Upper HDI" = HDInterval::hdi(f.change)[2],
             "Probability of difference" = sum(.value > 0)/n()) %>% 
@@ -1426,13 +1396,13 @@ method.resids %>% testZeroInflation()
 ### Investigation
 
 ```{r Difference between detectability of methods for different reptile lifestyles}
-(diff.det.life.meth <- methods.det.life.brm2b %>%
+(diff.det.life.meth.rev <- methods.det.life.brm2b %>%
   emmeans(~assessment.method|lifestyle) %>% 
-  regrid() %>%
+  regrid(transform = "none") %>% 
   pairs() %>% 
   #pairs(reverse = TRUE) %>% to reverse the contrasts 
   gather_emmeans_draws() %>% 
-  mutate(Percent = 100 * (exp(.value)-1), f.change = exp(.value)) %>%
+  mutate(f.change = exp(.value)) %>%
   summarise("Average fractional change" = median(f.change),
             "Lower HDI" = HDInterval::hdi(f.change)[1],
             "Upper HDI" = HDInterval::hdi(f.change)[2],
